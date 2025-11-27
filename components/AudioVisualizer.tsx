@@ -13,7 +13,11 @@ const AudioVisualizer: React.FC<Props> = ({ isRecording, theme = "dark" }) => {
   const rafRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Cleanup function
+  // Configuration constants
+  const FFT_SIZE = 2048; // High resolution for smooth time-domain waves
+  const NOISE_FLOOR = 3; // Ignore signals below this deviation (0-128 scale) to stay steady
+  const AMPLIFICATION = 1.5; // Boost visual height of the wave
+
   const cleanup = () => {
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
@@ -36,11 +40,20 @@ const AudioVisualizer: React.FC<Props> = ({ isRecording, theme = "dark" }) => {
       audioContextRef.current = null;
     }
     
-    // Clear canvas
+    // Clear and reset canvas to a flat line
     const canvas = canvasRef.current;
     if (canvas) {
       const ctx = canvas.getContext("2d");
-      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (ctx) {
+          const { width, height } = canvas;
+          ctx.clearRect(0, 0, width, height);
+          ctx.beginPath();
+          ctx.moveTo(0, height / 2);
+          ctx.lineTo(width, height / 2);
+          ctx.strokeStyle = theme === "colorful" ? "rgba(168, 85, 247, 0.2)" : "rgba(59, 130, 246, 0.2)";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+      }
     }
   };
 
@@ -62,10 +75,7 @@ const AudioVisualizer: React.FC<Props> = ({ isRecording, theme = "dark" }) => {
         sourceRef.current = audioCtx.createMediaStreamSource(stream);
         
         const analyser = audioCtx.createAnalyser();
-        // Larger FFT size for smoother data points
-        analyser.fftSize = 512; 
-        // Higher smoothing for that "liquid" feel
-        analyser.smoothingTimeConstant = 0.85; 
+        analyser.fftSize = FFT_SIZE;
         analyserRef.current = analyser;
 
         sourceRef.current.connect(analyser);
@@ -87,108 +97,104 @@ const AudioVisualizer: React.FC<Props> = ({ isRecording, theme = "dark" }) => {
 
     const ctx = canvas.getContext("2d")!;
     const analyser = analyserRef.current;
-    const bufferLength = analyser.frequencyBinCount;
-    const data = new Uint8Array(bufferLength);
+    const bufferLength = analyser.fftSize;
+    const dataArray = new Uint8Array(bufferLength);
 
-    // Handle High DPI Screens for crisp lines
+    // Handle High DPI Screens
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
-    
-    // Set actual size in memory (scaled to account for extra pixel density)
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
-    
-    // Normalize coordinate system to use css pixels
     ctx.scale(dpr, dpr);
 
     const WIDTH = rect.width;
     const HEIGHT = rect.height;
     const midY = HEIGHT / 2;
 
-    // Configuration based on theme
     const isColorful = theme === "colorful";
     const primaryColor = isColorful ? "#a855f7" : "#3b82f6"; // Purple or Blue
     const secondaryColor = isColorful ? "#ec4899" : "#06b6d4"; // Pink or Cyan
 
     const render = () => {
-      analyser.getByteFrequencyData(data);
+      // Get Time Domain Data (Waveform) - this sits at 128 for silence
+      analyser.getByteTimeDomainData(dataArray);
 
       ctx.clearRect(0, 0, WIDTH, HEIGHT);
-      
+
       // Create Gradients
       const gradient = ctx.createLinearGradient(0, 0, WIDTH, 0);
       gradient.addColorStop(0, primaryColor);
       gradient.addColorStop(0.5, secondaryColor);
       gradient.addColorStop(1, primaryColor);
 
-      // Draw Settings
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
 
-      // --- DRAW WAVE FUNCTION ---
-      const drawWave = (dataArray: Uint8Array, dampener: number, color: string, thickness: number, offset: number) => {
+      const drawWave = (offsetY: number, color: string | CanvasGradient, width: number, phaseShift: number) => {
         ctx.beginPath();
         ctx.strokeStyle = color;
-        ctx.lineWidth = thickness;
-        
-        // Start at the left middle
-        ctx.moveTo(0, midY);
+        ctx.lineWidth = width;
 
-        // We only visualize the first 30% of the frequency bins (where human voice lives)
-        // otherwise the right side of the graph is usually flat.
-        const sliceWidth = WIDTH / (bufferLength * 0.4); 
-        
+        const sliceWidth = WIDTH / bufferLength;
         let x = 0;
 
-        // Loop through data to create control points for curves
-        for (let i = 0; i < bufferLength * 0.4; i++) {
-          const v = dataArray[i] / 128.0; // value 0 to 2 approx
-          const amplitude = (v - 1) * (HEIGHT / 2) * dampener; // Scale height
-          
-          const y = midY - amplitude;
-          
-          // Use offset to create a "moving" effect if desired, or just static symmetric
-          // For Smooth Curves: use quadraticCurveTo
-          // We calculate the midpoint between this point and the next to use as the anchor
-          
-          const nextV = dataArray[i + 1] ? dataArray[i + 1] / 128.0 : 1;
-          const nextAmp = (nextV - 1) * (HEIGHT / 2) * dampener;
-          const nextY = midY - nextAmp;
-          const nextX = x + sliceWidth;
+        // We use a subset of the buffer to zoom in on the waveform
+        // otherwise it looks too high frequency/jittery
+        const zoomFactor = 4; 
+        const effectiveBuffer = Math.floor(bufferLength / zoomFactor);
 
-          const cpX = (x + nextX) / 2;
-          const cpY = (y + nextY) / 2;
+        ctx.moveTo(0, midY);
 
-          ctx.quadraticCurveTo(x, y, cpX, cpY);
+        for (let i = 0; i < effectiveBuffer; i++) {
+            // The data is a circular buffer in some browsers, but generally linear here.
+            // Use phaseShift to grab different parts of the buffer for the "ghost" effect
+            let index = (i * zoomFactor + phaseShift) % bufferLength;
+            
+            // 128 is zero (silence). 0 is -1, 255 is +1.
+            let v = dataArray[index] / 128.0; 
+            
+            // Noise Gate & Smoothing
+            let deviation = v - 1;
+            
+            // If signal is very weak (noise), force it to flat
+            if (Math.abs(deviation) < (NOISE_FLOOR / 128)) {
+                deviation = 0;
+            }
 
-          x += sliceWidth;
+            // Apply amplification
+            let y = midY + (deviation * (HEIGHT / 2) * AMPLIFICATION) + offsetY;
+
+            // Smooth curves
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                // Cubic spline or simple line. Linear is fast and with high FFT_SIZE looks smooth.
+                // For extra smoothness, we could calculate control points, but at 2048 resolution
+                // simple line segments are very smooth visually.
+                // Let's use a simple averaging with previous point to smooth out jagged peaks
+                const prevX = x - (WIDTH / effectiveBuffer);
+                // const cpX = (prevX + x) / 2;
+                // ctx.quadraticCurveTo(prevX, y, x, y); // naive
+                ctx.lineTo(x, y);
+            }
+
+            x += (WIDTH / effectiveBuffer);
         }
 
         ctx.lineTo(WIDTH, midY);
         ctx.stroke();
-        ctx.closePath();
-      };
+    };
 
-      // 1. Draw Background Glow Wave (Lower opacity, wider line)
+      // 1. Ghost Wave (faint, offset)
       ctx.globalAlpha = 0.3;
-      ctx.shadowBlur = 20;
-      ctx.shadowColor = secondaryColor;
-      drawWave(data, 0.6, secondaryColor, 6, 5);
+      ctx.shadowBlur = 0;
+      drawWave(0, secondaryColor, 4, 100);
 
-      // 2. Draw Main Wave (High opacity, sharp line)
+      // 2. Main Wave (bright, glowing)
       ctx.globalAlpha = 1.0;
-      ctx.shadowBlur = isColorful ? 15 : 10;
+      ctx.shadowBlur = 15;
       ctx.shadowColor = primaryColor;
-      // Slightly amplify the main wave (0.8)
-      drawWave(data, 0.9, gradient as any, 3, 0);
-
-      // 3. Draw Mirror Wave (Bottom half reflection effect)
-      ctx.globalAlpha = 0.15;
-      ctx.save();
-      ctx.translate(0, HEIGHT); // Move to bottom
-      ctx.scale(1, -1); // Flip vertically
-      drawWave(data, 0.5, primaryColor, 4, 0);
-      ctx.restore();
+      drawWave(0, gradient, 3, 0);
 
       rafRef.current = requestAnimationFrame(render);
     };
@@ -203,8 +209,8 @@ const AudioVisualizer: React.FC<Props> = ({ isRecording, theme = "dark" }) => {
         className="w-full h-full"
         style={{ width: "100%", height: "100%" }}
       />
-      {/* Optional Overlay for extra polish */}
-      <div className="absolute inset-0 pointer-events-none bg-gradient-to-r from-black/20 via-transparent to-black/20" />
+      {/* Vignette Overlay */}
+      <div className="absolute inset-0 pointer-events-none bg-gradient-to-r from-black/40 via-transparent to-black/40" />
     </div>
   );
 };
