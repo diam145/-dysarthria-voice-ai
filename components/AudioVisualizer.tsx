@@ -1,13 +1,15 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 
-interface AudioVisualizerProps {
+interface Props {
   isRecording: boolean;
 }
 
-const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ isRecording }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  // Initialize with 0 to fix "Expected 1 arguments, but got 0" error
-  const animationRef = useRef<number>(0);
+const AudioVisualizer: React.FC<Props> = ({ isRecording }) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const dataArrayRef = useRef<Uint8Array | null>(null);
+  const animationRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!isRecording) {
@@ -15,55 +17,66 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ isRecording }) => {
       return;
     }
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+      audioContextRef.current = new AudioContext();
+      const source = audioContextRef.current.createMediaStreamSource(stream);
 
-    let time = 0;
+      analyserRef.current = audioContextRef.current.createAnalyser();
+      analyserRef.current.fftSize = 2048;
 
-    const animate = () => {
-      time += 0.1;
-      const width = canvas.width;
-      const height = canvas.height;
+      const bufferLength = analyserRef.current.frequencyBinCount;
+      dataArrayRef.current = new Uint8Array(bufferLength);
 
-      ctx.clearRect(0, 0, width, height);
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = '#4f46e5'; // Indigo 600
+      source.connect(analyserRef.current);
 
-      ctx.beginPath();
-      
-      for (let x = 0; x < width; x++) {
-        // Simple sine wave simulation for visualization since we don't have the raw analyzer node exposed here easily
-        // In a full app, we'd pass the AnalyserNode prop.
-        const y = height / 2 + Math.sin(x * 0.05 + time) * 10 * Math.sin(time * 0.5);
-        if (x === 0) {
-            ctx.moveTo(x, y);
-        } else {
-            ctx.lineTo(x, y);
-        }
-      }
-      
-      ctx.stroke();
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
+      draw();
+    });
 
     return () => {
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
     };
   }, [isRecording]);
 
-  if (!isRecording) return <div className="h-12 w-full bg-zinc-900 rounded-lg flex items-center justify-center text-zinc-600 text-xs">Microphone Idle</div>;
+  const draw = () => {
+    const canvas = canvasRef.current;
+    const analyser = analyserRef.current;
+    const dataArray = dataArrayRef.current;
+
+    if (!canvas || !analyser || !dataArray) return;
+
+    const ctx = canvas.getContext("2d")!;
+    const width = canvas.width;
+    const height = canvas.height;
+
+    analyser.getByteTimeDomainData(dataArray);
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#646cff";
+
+    ctx.beginPath();
+    const sliceWidth = width / dataArray.length;
+
+    let x = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+      let v = dataArray[i] / 128.0; 
+      let y = (v * height) / 2;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      x += sliceWidth;
+    }
+    ctx.lineTo(width, height / 2);
+    ctx.stroke();
+
+    animationRef.current = requestAnimationFrame(draw);
+  };
 
   return (
-    <div className="h-12 w-full bg-zinc-900 rounded-lg overflow-hidden relative">
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <span className="text-indigo-400 text-xs font-mono animate-pulse">LISTENING</span>
-        </div>
-      <canvas ref={canvasRef} width={300} height={48} className="w-full h-full" />
-    </div>
+    <canvas
+      ref={canvasRef}
+      className="w-full h-12 rounded-lg"
+      width={800}
+      height={50}
+    />
   );
 };
 

@@ -95,11 +95,9 @@ const App: React.FC = () => {
         setGuestConnectionStatus('rejected');
         break;
       case 'TRANSCRIPT_UPDATE':
-        if (guestConnectionStatus === "connected") {
-          const entry = msg.payload.entry as TranscriptEntry;
-
-          // Append transcript to guest side
-          setTranscript((prev) => [...prev, entry]);
+        if (msg.payload?.entry) {
+            const entry = msg.payload.entry as TranscriptEntry;
+            setTranscript(prev => [...prev, entry]);
         }
         break;
       case 'TRANSCRIPT_CLEAR':
@@ -144,76 +142,71 @@ const App: React.FC = () => {
       await whisperRef.current?.disconnect();
       setIsRecording(false);
       setStatus('disconnected');
-    } else {
-      // Check hardcoded config
-      const endpoint = CONFIG_ENDPOINT_URL || process.env.HF_ENDPOINT_URL;
-      const token = CONFIG_HF_TOKEN || process.env.HF_TOKEN;
-
-      if (!endpoint) {
-        setError("Missing Endpoint URL. Please add CONFIG_ENDPOINT_URL in App.tsx.");
-        return;
-      }
-      
-      setStatus('connecting');
-      setError(null);
-      
-      const service = new WhisperService({
-        endpointUrl: endpoint,
-        hfToken: token,
-
-        // Called when audio stream starts (not HF ready yet)
-        onConnect: () => {
-          setStatus('connecting');
-          setIsRecording(true);
-        },
-
-        // HuggingFace says "model is loading..."
-        onWarmup: () => {
-          setStatus('warming_up');
-        },
-
-        // First real transcription received
-        onReady: () => {
-          setStatus('connected');
-        },
-
-        // Local transcript update on host
-        onTranscription: (entry) => {
-          setTranscript((prev) => [...prev, entry]);
-
-          // Broadcast to guests
-          signalingRef.current?.send({
-            type: 'TRANSCRIPT_UPDATE',
-            payload: { entry }
-          });
-        },
-
-        // Send transcript to Firebase directly from WhisperService (fire-and-forget)
-        onBroadcastTranscript: (entry) => {
-          signalingRef.current?.send({
-            type: 'TRANSCRIPT_UPDATE',
-            payload: { entry }
-          });
-        },
-
-        onDisconnect: () => {
-          setStatus('disconnected');
-          setIsRecording(false);
-        },
-
-        onError: (err) => {
-          console.error("WhisperService error:", err);
-          setError(err.message || "Connection failed");
-          setStatus('error');
-          setIsRecording(false);
-        }
-      });
-
-      
-      whisperRef.current = service;
-      await service.connect();
+      return;
     }
+
+    // -------- START NEW RECORDING --------
+    const endpoint = CONFIG_ENDPOINT_URL || process.env.HF_ENDPOINT_URL;
+    const token = CONFIG_HF_TOKEN || process.env.HF_TOKEN;
+
+    if (!endpoint) {
+      setError("Missing Endpoint URL. Please add CONFIG_ENDPOINT_URL in App.tsx.");
+      return;
+    }
+
+    setStatus('connecting');   // UI: Mic connected but HF not ready
+    setError(null);
+
+    const service = new WhisperService({
+      endpointUrl: endpoint,
+      hfToken: token,
+
+      // 1) Microphone connected (NOT the HF model yet)
+      onConnect: () => {
+        setIsRecording(true);
+        // Do NOT overwrite "connecting" here — HF might still be cold
+      },
+
+      // 2) HF endpoint says: “model is loading…”
+      onWarmup: () => {
+        setStatus('warming_up');
+      },
+
+      // 3) First successful transcription received => fully ready
+      onReady: () => {
+        setStatus('connected');
+      },
+
+      // 4) New transcript segment from HF
+      onTranscription: (entry) => {
+        setTranscript((prev) => [...prev, entry]);
+
+        // Broadcast to guests
+        signalingRef.current?.send({
+          type: 'TRANSCRIPT_UPDATE',
+          payload: { entry }
+        });
+      },
+
+      // 5) When connection/mic stops
+      onDisconnect: () => {
+        setStatus('disconnected');
+        setIsRecording(false);
+      },
+
+      // 6) Errors (network/HF/auth/mic)
+      onError: (err) => {
+        console.error("WhisperService error:", err);
+        setError(err.message || "Connection failed");
+        setStatus('error');
+        setIsRecording(false);
+      }
+    });
+
+    whisperRef.current = service;
+    await service.connect();
   }, [isRecording]);
+
 
   const handleGuestResponse = (accept: boolean) => {
     if (!pendingGuest) return;
@@ -429,27 +422,49 @@ const App: React.FC = () => {
         </div>
         
         <div className="flex items-center gap-3">
-            {/* Clear Button */}
-            <button 
-                onClick={clearTranscript}
-                title="Clear Transcript"
-                className={`p-2 rounded-lg transition-colors ${theme === 'colorful' ? 'hover:bg-white/10 text-white/70 hover:text-white' : 'hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'}`}
-            >
-                <Trash2 className="w-4 h-4" />
-            </button>
+          {/* Clear Button */}
+          <button 
+              onClick={clearTranscript}
+              title="Clear Transcript"
+              className={`p-2 rounded-lg transition-colors ${
+                theme === 'colorful'
+                  ? 'hover:bg-white/10 text-white/70 hover:text-white'
+                  : 'hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+              }`}
+          >
+              <Trash2 className="w-4 h-4" />
+          </button>
 
-            <div className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full border ${theme === 'colorful' ? 'border-white/10 bg-white/5' : 'border-zinc-800 bg-zinc-900'}`}>
-                <Users className="w-4 h-4 opacity-50" />
-                <span className="text-xs opacity-60">{guests.length} Guest{guests.length !== 1 ? 's' : ''}</span>
-            </div>
-            <button 
-                onClick={() => setShowShareModal(true)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${tc.buttonSecondary}`}
-            >
-                <Share2 className="w-4 h-4" />
-                Share
-            </button>
+          {/* END SESSION Button */}
+          <button
+            onClick={() => {
+                signalingRef.current?.send({ type: "SESSION_ENDED" });
+                setGuests([]);
+                setTranscript([]);
+            }}
+            className="p-2 rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors"
+          >
+            End
+          </button>
+
+          <div className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full border ${
+            theme === 'colorful' ? 'border-white/10 bg-white/5' : 'border-zinc-800 bg-zinc-900'
+          }`}>
+              <Users className="w-4 h-4 opacity-50" />
+              <span className="text-xs opacity-60">
+                {guests.length} Guest{guests.length !== 1 ? 's' : ''}
+              </span>
+          </div>
+
+          <button 
+              onClick={() => setShowShareModal(true)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${tc.buttonSecondary}`}
+          >
+              <Share2 className="w-4 h-4" />
+              Share
+          </button>
         </div>
+
       </header>
 
       {/* Main Content */}
