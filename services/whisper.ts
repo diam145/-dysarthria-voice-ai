@@ -26,61 +26,37 @@ export class WhisperService {
     if (this.isConnected) return;
 
     try {
-      // (1) Warmup phase begins
-      this.config.onWarmup?.();
-
-      // (2) Probe HF endpoint until it wakes up (max ~15s)
-      let warmed = false;
-      for (let i = 0; i < 10; i++) {
-        try {
-          const probe = await fetch(this.config.endpointUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ warmup: true })
-          });
-
-          if (probe.ok) {
-            warmed = true;
-            break;
-          }
-        } catch (_) {}
-
-        await new Promise(res => setTimeout(res, 1500));
-      }
-
-      if (!warmed) {
-        throw new Error("Endpoint is sleeping or unreachable.");
-      }
-
-      // (3) Notify ready before recording audio
-      this.config.onReady?.();
-
-      // (4) Microphone setup
       this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const source = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
 
+      const source = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
       this.processor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
+
       this.processor.onaudioprocess = (e) => {
         if (!this.isConnected) return;
 
         const inputData = e.inputBuffer.getChannelData(0);
         const currentSampleRate = this.inputAudioContext!.sampleRate;
-        const processedData = this.resampleToTarget(inputData, currentSampleRate);
+        const processed = this.resampleToTarget(inputData, currentSampleRate);
 
-        this.audioBuffer.push(processedData);
-        this.bufferLength += processedData.length;
+        this.audioBuffer.push(processed);
+        this.bufferLength += processed.length;
       };
 
       source.connect(this.processor);
       this.processor.connect(this.inputAudioContext.destination);
 
       this.isConnected = true;
+      this.config.onConnect?.();  // microphone is ready
 
-      // Microphone ready
-      this.config.onConnect();
+      // 🔥 IMPORTANT: warmup HF endpoint BEFORE any mic audio arrives
+      const warmupSilence = new Float32Array(1600); // 0.1s
+      const warmupWav = this.encodeToWAV(warmupSilence, this.TARGET_SAMPLE_RATE);
 
-      // Begin sending audio chunks every 3 seconds
+      this.sendToHuggingFace(warmupWav)
+        .catch(() => this.config.onWarmup?.());
+
+      // Start interval for live mic streaming
       this.processingInterval = setInterval(() => {
         this.processAudioChunk();
       }, this.CHUNK_DURATION_SEC * 1000);
@@ -89,6 +65,7 @@ export class WhisperService {
       this.config.onError(error as Error);
     }
   }
+
 
 
   // --------------------
