@@ -95,19 +95,11 @@ const App: React.FC = () => {
         setGuestConnectionStatus('rejected');
         break;
       case 'TRANSCRIPT_UPDATE':
-        if (guestConnectionStatus === 'connected') {
-          if (msg.payload.entry) {
-             const entry = msg.payload.entry as TranscriptEntry;
-             setTranscript(prev => {
-                // If the backend sends partial updates (less likely with HF API, but good to handle)
-                const last = prev[prev.length - 1];
-                if (last && last.id === entry.id && entry.isPartial) {
-                    const updated = { ...last, text: entry.text }; // HF usually sends full text for segment
-                    return [...prev.slice(0, -1), updated];
-                }
-                return [...prev, entry];
-             });
-          }
+        if (guestConnectionStatus === "connected") {
+          const entry = msg.payload.entry as TranscriptEntry;
+
+          // Append transcript to guest side
+          setTranscript((prev) => [...prev, entry]);
         }
         break;
       case 'TRANSCRIPT_CLEAR':
@@ -167,31 +159,56 @@ const App: React.FC = () => {
       
       const service = new WhisperService({
         endpointUrl: endpoint,
-        hfToken: token, 
+        hfToken: token,
+
+        // Called when audio stream starts (not HF ready yet)
         onConnect: () => {
-          setStatus('connected');
+          setStatus('connecting');
           setIsRecording(true);
         },
+
+        // HuggingFace says "model is loading..."
+        onWarmup: () => {
+          setStatus('warming_up');
+        },
+
+        // First real transcription received
+        onReady: () => {
+          setStatus('connected');
+        },
+
+        // Local transcript update on host
+        onTranscription: (entry) => {
+          setTranscript((prev) => [...prev, entry]);
+
+          // Broadcast to guests
+          signalingRef.current?.send({
+            type: 'TRANSCRIPT_UPDATE',
+            payload: { entry }
+          });
+        },
+
+        // Send transcript to Firebase directly from WhisperService (fire-and-forget)
+        onBroadcastTranscript: (entry) => {
+          signalingRef.current?.send({
+            type: 'TRANSCRIPT_UPDATE',
+            payload: { entry }
+          });
+        },
+
         onDisconnect: () => {
           setStatus('disconnected');
           setIsRecording(false);
         },
+
         onError: (err) => {
-          console.error(err);
+          console.error("WhisperService error:", err);
           setError(err.message || "Connection failed");
           setStatus('error');
           setIsRecording(false);
-        },
-        onTranscription: (entry) => {
-          setTranscript(prev => {
-            signalingRef.current?.send({
-                type: 'TRANSCRIPT_UPDATE',
-                payload: { entry }
-            });
-            return [...prev, entry];
-          });
         }
       });
+
       
       whisperRef.current = service;
       await service.connect();
