@@ -2,107 +2,73 @@ import React, { useEffect, useRef } from "react";
 
 interface Props {
   isRecording: boolean;
-  theme?: "dark" | "colorful";
 }
 
-const AudioVisualizer: React.FC<Props> = ({ isRecording, theme = "dark" }) => {
+const AudioVisualizer: React.FC<Props> = ({ isRecording }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const rafRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
-    if (!isRecording) {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-        }
-      }
-      return;
-    }
+    if (!isRecording) return;
 
-    // Setup audio
-    audioContextRef.current = new AudioContext();
     navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-      const audioCtx = audioContextRef.current!;
-      sourceRef.current = audioCtx.createMediaStreamSource(stream);
+      audioContextRef.current = new AudioContext();
+      const source = audioContextRef.current.createMediaStreamSource(stream);
 
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.7;
-      analyserRef.current = analyser;
+      analyserRef.current = audioContextRef.current.createAnalyser();
+      analyserRef.current.fftSize = 256;
 
-      sourceRef.current.connect(analyser);
+      source.connect(analyserRef.current);
 
       drawBars();
     });
 
     return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      audioContextRef.current?.close();
     };
   }, [isRecording]);
 
   const drawBars = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvasRef.current || !analyserRef.current) return;
 
-    const ctx = canvas.getContext("2d")!;
-    const analyser = analyserRef.current!;
-    const bufferLength = analyser.frequencyBinCount;
+    const ctx = canvasRef.current.getContext("2d")!;
+    const bufferLength = analyserRef.current.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
 
-    const BAR_COUNT = 60;
-    const BAR_WIDTH = canvas.width / BAR_COUNT;
+    const draw = () => {
+      requestAnimationFrame(draw);
+      analyserRef.current!.getByteFrequencyData(dataArray);
 
-    const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
-    if (theme === "colorful") {
-      gradient.addColorStop(0, "#4f46e5");
-      gradient.addColorStop(0.5, "#9333ea");
-      gradient.addColorStop(1, "#ec4899");
-    } else {
-      gradient.addColorStop(0, "#6366f1");
-      gradient.addColorStop(1, "#3b82f6");
-    }
+      ctx.clearRect(0, 0, canvasRef.current!.width, canvasRef.current!.height);
 
-    const render = () => {
-      analyser.getByteFrequencyData(dataArray);
+      const barWidth = (canvasRef.current!.width / bufferLength) * 2;
+      let x = 0;
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (let i = 0; i < bufferLength; i++) {
+        const barHeight = dataArray[i] / 3;
 
-      const mid = canvas.height / 2;
-
-      for (let i = 0; i < BAR_COUNT; i++) {
-        const slice = Math.floor((i / BAR_COUNT) * bufferLength);
-        const value = dataArray[slice];
-
-        const normalized = value / 255; // 0–1
-        const barHeight = normalized * (canvas.height * 0.8);
-
-        ctx.fillStyle = gradient;
+        ctx.fillStyle = "rgba(129, 140, 248, 1)"; // Indigo
         ctx.fillRect(
-          i * BAR_WIDTH,
-          mid - barHeight / 2,
-          BAR_WIDTH * 0.8,
+          x,
+          canvasRef.current!.height / 2 - barHeight / 2,
+          barWidth,
           barHeight
         );
-      }
 
-      rafRef.current = requestAnimationFrame(render);
+        x += barWidth + 1;
+      }
     };
 
-    render();
+    draw();
   };
 
   return (
     <canvas
       ref={canvasRef}
-      width={600}
-      height={100}
-      className="w-full h-[60px] rounded-xl opacity-90"
+      width={800}
+      height={80}
+      className="w-full rounded-xl"
     />
   );
 };
