@@ -1,81 +1,118 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useEffect, useRef } from "react";
 
 interface Props {
   isRecording: boolean;
+  theme?: "dark" | "colorful";
 }
 
-const AudioVisualizer: React.FC<Props> = ({ isRecording }) => {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+const AudioVisualizer: React.FC<Props> = ({ isRecording, theme = "dark" }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const dataArrayRef = useRef<Uint8Array | null>(null);
-  const animationRef = useRef<number | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!isRecording) {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
       return;
     }
 
-    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-      audioContextRef.current = new AudioContext();
-      const source = audioContextRef.current.createMediaStreamSource(stream);
+    audioContextRef.current = new AudioContext();
 
-      analyserRef.current = audioContextRef.current.createAnalyser();
-      analyserRef.current.fftSize = 2048;
+    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+      const audioCtx = audioContextRef.current!;
+      sourceRef.current = audioCtx.createMediaStreamSource(stream);
 
-      const bufferLength = analyserRef.current.frequencyBinCount;
-      dataArrayRef.current = new Uint8Array(bufferLength);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.6;
+      analyserRef.current = analyser;
 
-      source.connect(analyserRef.current);
+      sourceRef.current.connect(analyser);
 
       draw();
     });
 
     return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, [isRecording]);
 
   const draw = () => {
     const canvas = canvasRef.current;
-    const analyser = analyserRef.current;
-    const dataArray = dataArrayRef.current;
-
-    if (!canvas || !analyser || !dataArray) return;
+    if (!canvas) return;
 
     const ctx = canvas.getContext("2d")!;
-    const width = canvas.width;
-    const height = canvas.height;
+    const analyser = analyserRef.current!;
+    const bufferLength = analyser.frequencyBinCount;
+    const data = new Uint8Array(bufferLength);
 
-    analyser.getByteTimeDomainData(dataArray);
+    const WIDTH = canvas.width;
+    const HEIGHT = canvas.height;
+    const BAR_COUNT = 90;
+    const BAR_WIDTH = WIDTH / BAR_COUNT;
 
-    ctx.clearRect(0, 0, width, height);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "#646cff";
+    const midY = HEIGHT / 2;
 
-    ctx.beginPath();
-    const sliceWidth = width / dataArray.length;
-
-    let x = 0;
-    for (let i = 0; i < dataArray.length; i++) {
-      let v = dataArray[i] / 128.0; 
-      let y = (v * height) / 2;
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-      x += sliceWidth;
+    // gradient
+    const gradient = ctx.createLinearGradient(0, 0, WIDTH, 0);
+    if (theme === "colorful") {
+      gradient.addColorStop(0, "#4f46e5"); // indigo
+      gradient.addColorStop(0.5, "#9333ea"); // violet
+      gradient.addColorStop(1, "#ec4899"); // pink
+    } else {
+      gradient.addColorStop(0, "#3b82f6"); // blue
+      gradient.addColorStop(1, "#06b6d4"); // cyan
     }
-    ctx.lineTo(width, height / 2);
-    ctx.stroke();
 
-    animationRef.current = requestAnimationFrame(draw);
+    const glowColor = theme === "colorful" ? "#a855f7" : "#3b82f6";
+
+    const render = () => {
+      analyser.getByteFrequencyData(data);
+
+      ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+      ctx.fillStyle = gradient;
+      ctx.shadowColor = glowColor;
+      ctx.shadowBlur = theme === "colorful" ? 18 : 10;
+
+      for (let i = 0; i < BAR_COUNT; i++) {
+        const slice = Math.floor((i / BAR_COUNT) * bufferLength);
+        const amplitude = data[slice];
+
+        // Normalize + scale
+        const normalized = amplitude / 255;
+        const barHeight = normalized * (HEIGHT * 0.9);
+
+        const x = i * BAR_WIDTH;
+
+        // draw top bar
+        ctx.fillRect(x, midY - barHeight, BAR_WIDTH * 0.65, barHeight);
+
+        // draw mirrored bottom bar
+        ctx.fillRect(x, midY, BAR_WIDTH * 0.65, barHeight);
+      }
+
+      ctx.shadowBlur = 0;
+
+      rafRef.current = requestAnimationFrame(render);
+    };
+
+    render();
   };
 
   return (
     <canvas
       ref={canvasRef}
-      className="w-full h-12 rounded-lg"
-      width={800}
-      height={50}
+      width={600}
+      height={130}
+      className="w-full h-[80px] rounded-xl"
     />
   );
 };
