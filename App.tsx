@@ -85,14 +85,14 @@ const App: React.FC = () => {
     const myGuestId = getGuestId();
     switch (msg.type) {
       case 'JOIN_APPROVED':
-        if (msg.payload?.guestId === myGuestId) {
-          setGuestConnectionStatus('connected');
-        }
-        break;
+        console.log("Guest received JOIN_APPROVED:", msg);
+
+      // No more strict guest ID matching — allow joining
+      setGuestConnectionStatus('connected');
+
+      break;
       case 'JOIN_REJECTED':
-         if (msg.payload?.guestId === myGuestId) {
-          setGuestConnectionStatus('rejected');
-        }
+        setGuestConnectionStatus('rejected');
         break;
       case 'TRANSCRIPT_UPDATE':
         if (guestConnectionStatus === 'connected') {
