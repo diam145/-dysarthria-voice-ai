@@ -1,0 +1,7 @@
+{
+  "name": "working whisper model ",
+  "description": "Live AI-driven transcription helping people with Dysarthria communicate clearly.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
