@@ -2,127 +2,107 @@ import React, { useEffect, useRef } from "react";
 
 interface Props {
   isRecording: boolean;
+  theme?: "dark" | "colorful";
 }
 
-const AudioVisualizer: React.FC<Props> = ({ isRecording }) => {
+const AudioVisualizer: React.FC<Props> = ({ isRecording, theme = "dark" }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const noiseFloorRef = useRef<number>(0); // Auto-learned baseline noise
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!isRecording) return;
+    if (!isRecording) {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+      }
+      return;
+    }
 
+    // Setup audio
+    audioContextRef.current = new AudioContext();
     navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-      audioContextRef.current = new AudioContext();
-      const source = audioContextRef.current.createMediaStreamSource(stream);
+      const audioCtx = audioContextRef.current!;
+      sourceRef.current = audioCtx.createMediaStreamSource(stream);
 
-      analyserRef.current = audioContextRef.current.createAnalyser();
-      analyserRef.current.fftSize = 512;
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.7;
+      analyserRef.current = analyser;
 
-      source.connect(analyserRef.current);
-
-      // 🔥 Learn the noise floor for 1 second
-      learnNoiseFloor();
+      sourceRef.current.connect(analyser);
 
       drawBars();
     });
 
     return () => {
-      audioContextRef.current?.close();
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, [isRecording]);
 
-  /**
-   * 🔥 Automatically learn background noise level
-   */
-  const learnNoiseFloor = () => {
-    const analyser = analyserRef.current;
-    if (!analyser) return;
-
-    let samples: number[] = [];
-
-    const learn = () => {
-      const arr = new Uint8Array(analyser.frequencyBinCount);
-      analyser.getByteFrequencyData(arr);
-
-      const rms = Math.sqrt(arr.reduce((a, b) => a + b * b, 0) / arr.length);
-      samples.push(rms);
-
-      if (samples.length < 30) {
-        requestAnimationFrame(learn);
-      } else {
-        // Baseline = average * 1.3
-        const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
-        noiseFloorRef.current = avg * 1.3;
-        console.log("🎤 Noise floor learned:", noiseFloorRef.current);
-      }
-    };
-
-    learn();
-  };
-
-  /**
-   * 🔥 Draw smooth noise-gated bar waveform
-   */
   const drawBars = () => {
-    if (!canvasRef.current || !analyserRef.current) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-    const ctx = canvasRef.current.getContext("2d")!;
+    const ctx = canvas.getContext("2d")!;
     const analyser = analyserRef.current!;
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
 
-    const draw = () => {
-      requestAnimationFrame(draw);
+    const BAR_COUNT = 60;
+    const BAR_WIDTH = canvas.width / BAR_COUNT;
 
+    const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
+    if (theme === "colorful") {
+      gradient.addColorStop(0, "#4f46e5");
+      gradient.addColorStop(0.5, "#9333ea");
+      gradient.addColorStop(1, "#ec4899");
+    } else {
+      gradient.addColorStop(0, "#6366f1");
+      gradient.addColorStop(1, "#3b82f6");
+    }
+
+    const render = () => {
       analyser.getByteFrequencyData(dataArray);
 
-      // Compute RMS volume
-      const rms = Math.sqrt(dataArray.reduce((a, b) => a + b * b, 0) / dataArray.length);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // 🔥 Apply noise gate
-      const noiseGate = noiseFloorRef.current || 15;
-      const signal = Math.max(0, rms - noiseGate);
+      const mid = canvas.height / 2;
 
-      ctx.clearRect(0, 0, canvasRef.current!.width, canvasRef.current!.height);
+      for (let i = 0; i < BAR_COUNT; i++) {
+        const slice = Math.floor((i / BAR_COUNT) * bufferLength);
+        const value = dataArray[slice];
 
-      if (signal <= 1) {
-        // Silent → draw flat bar
-        ctx.fillStyle = "rgba(129, 140, 248, 0.3)";
-        ctx.fillRect(0, canvasRef.current!.height / 2 - 2, canvasRef.current!.width, 4);
-        return;
-      }
+        const normalized = value / 255; // 0–1
+        const barHeight = normalized * (canvas.height * 0.8);
 
-      // Draw animated bars
-      const barWidth = (canvasRef.current!.width / bufferLength) * 1.5;
-      let x = 0;
-
-      for (let i = 0; i < bufferLength; i++) {
-        let barHeight = (dataArray[i] - noiseGate) * 0.8;
-        if (barHeight < 0) barHeight = 0;
-
-        ctx.fillStyle = "rgb(129, 140, 248)"; // Indigo
+        ctx.fillStyle = gradient;
         ctx.fillRect(
-          x,
-          canvasRef.current!.height / 2 - barHeight / 2,
-          barWidth,
+          i * BAR_WIDTH,
+          mid - barHeight / 2,
+          BAR_WIDTH * 0.8,
           barHeight
         );
-
-        x += barWidth + 1;
       }
+
+      rafRef.current = requestAnimationFrame(render);
     };
 
-    draw();
+    render();
   };
 
   return (
     <canvas
       ref={canvasRef}
-      width={800}
-      height={80}
-      className="w-full rounded-xl"
+      width={600}
+      height={100}
+      className="w-full h-[60px] rounded-xl opacity-90"
     />
   );
 };
