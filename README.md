@@ -1,20 +1,16 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Dysarthria Voice AI
 
-# Run and deploy your AI Studio app
+Live AI-driven speech transcription to help people with Dysarthria communicate more clearly.
 
-This contains everything you need to run your app locally.
+This web application uses a fine-tuned Whisper model hosted on Hugging Face to perform real-time speech-to-text transcription.  
+It supports a **Speaker mode** (records & broadcasts audio) and a **Guest mode** (view-only via QR code or link).
 
-View your app in AI Studio: https://ai.studio/apps/drive/15wkjWyb0DlWZSuFFSTqduqO-4IaUj3ic
+---
 
-## Run Locally
-
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## ⭐ Features
+- Real-time transcription using a custom Whisper model  
+- Host & Guest session support  
+- QR code session sharing  
+- Live transcript syncing  
+- Dark/Colorful themes  
+- Smooth animations and mobile-friendly UI  
