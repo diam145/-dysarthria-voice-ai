@@ -2,7 +2,7 @@
 
 Live AI-driven speech transcription to help people with Dysarthria communicate more clearly.
 
-This web application uses a fine-tuned Whisper model hosted on Hugging Face to perform real-time speech-to-text transcription.  
+This web application uses a fine-tuned Whisper model hosted on Hugging Face (https://huggingface.co/pealsen/whisper-small-specific-finetuned) to perform real-time speech-to-text transcription.  
 It supports a **Speaker mode** (records & broadcasts audio) and a **Guest mode** (view-only via QR code or link).
 
 ---
